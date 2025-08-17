@@ -1,0 +1,134 @@
+version: '3.9'
+
+services:
+  stem-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stem-analyzer-app
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - UNESCO_API=${UNESCO_API}
+      - WORLD_BANK_API=${WORLD_BANK_API}
+      - KAGGLE_API=${KAGGLE_API}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/stemdb
+      - MONGODB_URL=mongodb://mongo:27017/stemanalytics
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./models:/app/models
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - postgres
+      - mongo
+    networks:
+      - stem-network
+    restart: unless-stopped
+    command: python main.py
+
+  redis:
+    image: redis:7-alpine
+    container_name: stem-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: stem-postgres
+    environment:
+      - POSTGRES_DB=stemdb
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:6
+    container_name: stem-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: stem-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - stem-analyzer
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: stem-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: stem-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    networks:
+      - stem-network
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+  mongo-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  stem-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
